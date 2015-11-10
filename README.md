@@ -3,3 +3,5 @@ Trabajo practico final de filtros digitales con ARM de la familia STM32Ff4
 
 Calcular valor RMS, probemos esta funcion:
 STM32F401AudioPlaybackUSB/Drivers/CMSIS/DSP_Lib/Source/StatisticsFunctions/arm_rms_q15.c
+
+STM32Cube_FW_F4_V1.5.0/Drivers/CMSIS/DSP_Lib/Source/StatisticsFunctions/arm_rms_q15.c 
