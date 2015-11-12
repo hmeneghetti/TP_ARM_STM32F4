@@ -165,6 +165,7 @@ void PulseSM(int16_t *pBuff, int32_t length) {
 	}
 }
 
+//void SM_Pulse_Detect(int16_t *pBuff)
 
   /**    
    * @brief  Q15 square root function.    
@@ -351,16 +352,20 @@ void arm_rms_q15_m4(
 int32_t getDataCB(int16_t *pBuff, int32_t length)
 {
   UINT bytesread = 0;
-
+	int16_t *pBuff_RMS;
+	int16_t Audio_BufferRMS[length];	//	Buffer para almacenar las muestras filtradas
+	
+	pBuff_RMS = &Audio_BufferRMS[0];
+	
   f_read(&FileRead, pBuff, length*sizeof(int16_t), (void *)&bytesread); 
   
   audioFilter_filter(pBuff, pBuff, length);
   
-	arm_rms_q15_m4(pBuff, length, pBuff);
+	arm_rms_q15_m4(pBuff, length, pBuff_RMS);
 	
-//	printf("Valor RMS: %u uS\n",*pBuff);
+	printf("Valores:  %u RMS\n", *pBuff_RMS);
 	
-  PulseSM(pBuff, length);
+  PulseSM(pBuff_RMS, length);
   
   return bytesread;
 }
@@ -494,25 +499,25 @@ extern void application_task(void)
 				f_close(&FileRead);
 			}
 			
-			
 			appState = APPSTATE_PLAY;
       break;
 
+			
     case APPSTATE_PLAY:
-      if (f_open(&FileRead, WAVE_NAME_COMPLETO, FA_READ) != FR_OK)
-      {
+			if (f_open(&FileRead, WAVE_NAME_COMPLETO, FA_READ) != FR_OK){
+				
         Error_Handler();
-      }
-      else
-      {
-        /* Read sizeof(WaveFormat) from the selected file */
+				
+      }else{
+      
+				/* Read sizeof(WaveFormat) from the selected file */
         f_read (&FileRead, &waveformat, sizeof(waveformat), &bytesread);
         WavePlayerStart(waveformat, getDataCB, 80);
         f_close(&FileRead);
-      
       }
       break;
-    
+			
+			
     default:
       appState = APPSTATE_IDLE;
       break;
