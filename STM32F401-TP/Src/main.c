@@ -28,8 +28,10 @@
 /* Includes ------------------------------------------------------------------*/
 #include <stdio.h>
 #include "main.h"
+#include "timer2.h"
 #include "application.h"
 #include "utils.h"
+
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -115,7 +117,11 @@ int main(void)
   
   /*##-4- Start Host Process ###############################################*/
   USBH_Start(&hUSBHost);  
-  
+	
+	//	Inicializar el Timer 2.
+	PeriodicCaller_Init();
+	PeriodicCaller_Start();
+	
   /* Run Application (Blocking mode)*/
   while (1)
   {
@@ -287,7 +293,7 @@ static void TIM_LED_Config(void)
 void Error_Handler(void)
 {
   /* Turn LED3 on */
-  BSP_LED_On(LED3);
+  BSP_LED_On(LED4);
   while(1)
   {
   }
@@ -333,7 +339,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
     /* Turn OFF all LEDs */
 //    BSP_LED_Off(LED3);
     BSP_LED_Off(LED4);
-    BSP_LED_Off(LED5);
+//    BSP_LED_Off(LED5);
 //    BSP_LED_Off(LED6);
   }
   /* Get the TIM4 Input Capture 1 value */

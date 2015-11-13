@@ -49,12 +49,12 @@
 #include "utils.h"
 #include "audioFilter.h"
 #include "arm_math.h"
+#include "timer2.h"
 
 /* Private typedef -----------------------------------------------------------*/
 typedef enum
 {
   APPSTATE_IDLE = 0,
-  APPSTATE_GEN_SINE,
   APPSTATE_MOUNT_FS,
   APPSTATE_UMOUNT_FS,
   APPSTATE_WRITE,
@@ -64,334 +64,93 @@ typedef enum
 /* Private define ------------------------------------------------------------*/
 
 #define SINE_GEN_AUDIO_SAMPLE_RATE    8000
-
 #define SINE_GEN_DURATION             10
-
 #define SINE_GEN_1KHZ_LENGTH          (SINE_GEN_AUDIO_SAMPLE_RATE/1000)
-
 #define SINE_GEN_500HZ_LENGTH         (SINE_GEN_AUDIO_SAMPLE_RATE/500)
 
 /* Private variables ---------------------------------------------------------*/
 static FATFS USBDISKFatFs;           /* File system object for USB disk logical drive */
 static char USBDISKPath[4];          /* USB Host logical drive path */
 static appState_enum appState = APPSTATE_IDLE;
-//static audioFilter_filterSel_enum filterSel = AUDIO_FILTER_FILTER_SEL_LOW_PASS;
 static uint8_t usbConnected = 0;
 
 /* Variable used by FatFs*/
 static FIL FileRead;
 static FIL FileWrite;
-/*
-static const int16_t sine_1khz_FS8khz[SINE_GEN_1KHZ_LENGTH] =
-{
-  0, 23169, 32767, 23169, 0, -23169, 32767, -23169
-};
-*/
-static const int16_t sine_500hz_FS8khz[SINE_GEN_500HZ_LENGTH] =
-{
-  0,12539,23169,30272,32767,30272,23169,12539,0,-12539,-23169,-30272,-32767,-30272,-23169,-12539
-};
 
-
+uint16_t sync_tick = 0;
 
 /* Private function prototypes -----------------------------------------------*/
+
 /* Private functions ---------------------------------------------------------*/
 
-// Estados posibles de la Maquina de estado que detecta pulsos
-typedef enum {
-	ST_IDLE = 0,
-	ST_PULSE,
-} StPulse;
+//	Estados de la SM para deteccion de pulsos.
+#define St_Idle							0
+#define St_Pulse_det				1
 
-#define TRUE		1
-#define FALSE		0
+//	Valor de RMS para deteccion de tono.
+#define RMS_VALUE_DETECT		1000
 
-#define WAIT_MAX	1500	// Tiempo a esperar por un maximo [us]
-#define UMBRAL		2000	// Valor a partir del cual se considera presencia de un pulso
-
-StPulse PState	= ST_IDLE;	// Estado SM pulsos
-int16_t max		= 0;		// Maximo valor dentro de una muestra
-UINT	cont	= 0;		// Contador de tonos
-
-/*
-	Consulta si hay algun valor mayor al umbral en el buffer
-*/
-int16_t MayorUmbral(int16_t *pBuff, int32_t length) {
-	UINT i;
+//	Maquina de estados para la deteccion y encendido de leds.	//
+void SM_Pulse_Detect(int16_t rms_value){
 	
-	for(i = 0; i < length; i++) {
-		if(pBuff[i] >= UMBRAL)
-			return TRUE;
-	}
+	static UINT sm_status = St_Idle;
+	static UINT count = 0;
 	
-	return FALSE;
-}
-
-/*
-	Maquina de estados detectora de pulsos
-*/
-void PulseSM(int16_t *pBuff, int32_t length) {
-	switch(PState) {
-		// Esperando Pulso
-		case ST_IDLE:
-			if(MayorUmbral(pBuff, length) == TRUE) {
-				if(++cont < 6)
+	switch(sm_status){
+		
+		// Espero el primer pulso.
+		case St_Idle:
+			if(rms_value > RMS_VALUE_DETECT){
+				count++;					
+				if(count < 6)
 					BSP_LED_On(LED6);
-				else
+				else{
 					BSP_LED_On(LED3);
-				
-				if(cont == 6)
-					cont = 0;
-				
-				TickTock_Start();
-				PState = ST_PULSE;
+					count = 0;
+					//	Deshabilito interrupcion para atomicidad.
+					HAL_NVIC_DisableIRQ(TIM2_IRQn);
+					//	Reset del contador de sinc.
+					sync_tick = 60;
+					PeriodicCaller_Set(999999);
+					//	Habilito interrupcion.
+					HAL_NVIC_EnableIRQ(TIM2_IRQn);
+				}
+				sm_status = St_Pulse_det;
 			}
 			break;
 		
-		// Procesando Pulso
-		case ST_PULSE:
-			if(MayorUmbral(pBuff, length) == TRUE) {
-				TickTock_Stop();
-				TickTock_Start();
-			}
-
-			if(TickVal() > WAIT_MAX) {
+		// Apago leds una vez que cesa el tono.
+		case St_Pulse_det:
+			if(rms_value < RMS_VALUE_DETECT){
 				BSP_LED_Off(LED6);
 				BSP_LED_Off(LED3);
 				
-				PState = ST_IDLE;
+				sm_status = St_Idle;
 			}
 			break;
 	}
+	return;
 }
 
-//void SM_Pulse_Detect(int16_t *pBuff)
-
-  /**    
-   * @brief  Q15 square root function.    
-   * @param[in]   in     input value.  The range of the input value is [0 +1) or 0x0000 to 0x7FFF.    
-   * @param[out]  *pOut  square root of input value.    
-   * @return The function returns ARM_MATH_SUCCESS if the input value is positive
-   * and ARM_MATH_ARGUMENT_ERROR if the input is negative.  For
-   * negative inputs, the function returns *pOut = 0.
-   */
-
-arm_status arm_sqrt_q15(
-  q15_t in,
-  q15_t * pOut)
-{
-  q15_t number, temp1, var1, signBits1, half;
-  q31_t bits_val1;
-  float32_t temp_float1;
-  union
-  {
-    q31_t fracval;
-    float32_t floatval;
-  } tempconv;
-
-  number = in;
-
-  /* If the input is a positive number then compute the signBits. */
-  if(number > 0)
-  {
-    signBits1 = __CLZ(number) - 17;
-
-    /* Shift by the number of signBits1 */
-    if((signBits1 % 2) == 0)
-    {
-      number = number << signBits1;
-    }
-    else
-    {
-      number = number << (signBits1 - 1);
-    }
-
-    /* Calculate half value of the number */
-    half = number >> 1;
-    /* Store the number for later use */
-    temp1 = number;
-
-    /*Convert to float */
-    temp_float1 = number * 3.051757812500000e-005f;
-    /*Store as integer */
-    tempconv.floatval = temp_float1;
-    bits_val1 = tempconv.fracval;
-    /* Subtract the shifted value from the magic number to give intial guess */
-    bits_val1 = 0x5f3759df - (bits_val1 >> 1);  // gives initial guess  
-    /* Store as float */
-    tempconv.fracval = bits_val1;
-    temp_float1 = tempconv.floatval;
-    /* Convert to integer format */
-    var1 = (q31_t) (temp_float1 * 16384);
-
-    /* 1st iteration */
-    var1 = ((q15_t) ((q31_t) var1 * (0x3000 -
-                                     ((q15_t)
-                                      ((((q15_t)
-                                         (((q31_t) var1 * var1) >> 15)) *
-                                        (q31_t) half) >> 15))) >> 15)) << 2;
-    /* 2nd iteration */
-    var1 = ((q15_t) ((q31_t) var1 * (0x3000 -
-                                     ((q15_t)
-                                      ((((q15_t)
-                                         (((q31_t) var1 * var1) >> 15)) *
-                                        (q31_t) half) >> 15))) >> 15)) << 2;
-    /* 3rd iteration */
-    var1 = ((q15_t) ((q31_t) var1 * (0x3000 -
-                                     ((q15_t)
-                                      ((((q15_t)
-                                         (((q31_t) var1 * var1) >> 15)) *
-                                        (q31_t) half) >> 15))) >> 15)) << 2;
-
-    /* Multiply the inverse square root with the original value */
-    var1 = ((q15_t) (((q31_t) temp1 * var1) >> 15)) << 1;
-
-    /* Shift the output down accordingly */
-    if((signBits1 % 2) == 0)
-    {
-      var1 = var1 >> (signBits1 / 2);
-    }
-    else
-    {
-      var1 = var1 >> ((signBits1 - 1) / 2);
-    }
-    *pOut = var1;
-
-    return (ARM_MATH_SUCCESS);
-  }
-  /* If the number is a negative number then store zero as its square root value */
-  else
-  {
-    *pOut = 0;
-    return (ARM_MATH_ARGUMENT_ERROR);
-  }
-}
-
-/**    
- * @brief Root Mean Square of the elements of a Q15 vector.    
- * @param[in]       *pSrc points to the input vector    
- * @param[in]       blockSize length of the input vector    
- * @param[out]      *pResult rms value returned here    
- * @return none.    
- *    
- * @details    
- * <b>Scaling and Overflow Behavior:</b>    
- *    
- * \par    
- * The function is implemented using a 64-bit internal accumulator.    
- * The input is represented in 1.15 format.    
- * Intermediate multiplication yields a 2.30 format, and this    
- * result is added without saturation to a 64-bit accumulator in 34.30 format.    
- * With 33 guard bits in the accumulator, there is no risk of overflow, and the    
- * full precision of the intermediate multiplication is preserved.    
- * Finally, the 34.30 result is truncated to 34.15 format by discarding the lower     
- * 15 bits, and then saturated to yield a result in 1.15 format.    
- *    
- */
-
-void arm_rms_q15_m4(
-  q15_t * pSrc,
-  uint32_t blockSize,
-  q15_t * pResult)
-{
-  q63_t sum = 0;                                 /* accumulator */
-
-  /* Run the below code for Cortex-M4 and Cortex-M3 */
-
-  q31_t in;                                      /* temporary variable to store the input value */
-  q15_t in1;                                     /* temporary variable to store the input value */
-  uint32_t blkCnt;                               /* loop counter */
-
-  /* loop Unrolling */
-  blkCnt = blockSize >> 2u;
-
-  /* First part of the processing with loop unrolling.  Compute 4 outputs at a time.    
-   ** a second loop below computes the remaining 1 to 3 samples. */
-  while(blkCnt > 0u)
-  {
-    /* C = (A[0] * A[0] + A[1] * A[1] + ... + A[blockSize-1] * A[blockSize-1]) */
-    /* Compute sum of the squares and then store the results in a temporary variable, sum */
-    in = *__SIMD32(pSrc)++;
-    sum = __SMLALD(in, in, sum);
-    in = *__SIMD32(pSrc)++;
-    sum = __SMLALD(in, in, sum);
-
-    /* Decrement the loop counter */
-    blkCnt--;
-  }
-
-  /* If the blockSize is not a multiple of 4, compute any remaining output samples here.    
-   ** No loop unrolling is used. */
-  blkCnt = blockSize % 0x4u;
-
-  while(blkCnt > 0u)
-  {
-    /* C = (A[0] * A[0] + A[1] * A[1] + ... + A[blockSize-1] * A[blockSize-1]) */
-    /* Compute sum of the squares and then store the results in a temporary variable, sum */
-    in1 = *pSrc++;
-    sum = __SMLALD(in1, in1, sum);
-
-    /* Decrement the loop counter */
-    blkCnt--;
-  }
-
-  /* Truncating and saturating the accumulator to 1.15 format */
-  /* Store the result in the destination */
-  arm_sqrt_q15(__SSAT((sum / (q63_t)blockSize) >> 15, 16), pResult);
-
-  /* Truncating and saturating the accumulator to 1.15 format */
-  /* Store the result in the destination */
-  arm_sqrt_q15(__SSAT((sum / (q63_t)blockSize) >> 15, 16), pResult);
-
-}
-
-/**    
- * @} end of RMS group    
- */
-
-int32_t getDataCB(int16_t *pBuff, int32_t length)
-{
+int32_t getDataCB(int16_t *pBuff, int32_t length){
+	
   UINT bytesread = 0;
-	int16_t *pBuff_RMS;
-	int16_t Audio_BufferRMS[length];	//	Buffer para almacenar las muestras filtradas
+	int16_t Audio_RMS_value;	//	Valor RMS de 512 muestras
+	static int16_t count=0;
 	
-	pBuff_RMS = &Audio_BufferRMS[0];
-	
-  f_read(&FileRead, pBuff, length*sizeof(int16_t), (void *)&bytesread); 
+  f_read(&FileRead, pBuff, length*sizeof(int16_t), (void *)&bytesread);
   
   audioFilter_filter(pBuff, pBuff, length);
   
-	arm_rms_q15_m4(pBuff, length, pBuff_RMS);
+	arm_rms_q15_m4(pBuff, length, &Audio_RMS_value);
 	
-	printf("Valores:  %u RMS\n", *pBuff_RMS);
-	
-  PulseSM(pBuff_RMS, length);
-  
-  return bytesread;
-}
+	count++;
+	printf("Valores: %d, %d RMS\n", count, Audio_RMS_value);
 
-int32_t getDataSineCB(int16_t *pBuff, int32_t length)
-{
-  static int8_t count = 0;
-  int32_t ret = length * 2;
-  
-  TickTock_Start();
-  
-  while (length)
-  {
-    *pBuff = sine_500hz_FS8khz[count];
-    count++;
-    if (SINE_GEN_500HZ_LENGTH <= count)
-    {
-      count = 0;
-    }
-    pBuff++;
-    length--;
-  }
-  
-  TickTock_Stop();
-  
-  return ret;
+  SM_Pulse_Detect(Audio_RMS_value);
+	
+  return bytesread;
 }
 
 
@@ -424,14 +183,6 @@ extern void application_task(void)
       }
       break;
     
-    case APPSTATE_GEN_SINE:
-      waveformat.SampleRate = SINE_GEN_AUDIO_SAMPLE_RATE;
-      waveformat.FileSize = SINE_GEN_AUDIO_SAMPLE_RATE * SINE_GEN_DURATION * \
-                            sizeof(int16_t) + sizeof(WAVE_FormatTypeDef);
-      waveformat.NbrChannels = CHANNEL_MONO;
-      WavePlayerStart(waveformat, getDataSineCB, 70);
-      break;
-    
     case APPSTATE_MOUNT_FS:
       if (f_mount(&USBDISKFatFs, (TCHAR const*)USBDISKPath, 0 ) != FR_OK ) 
       {
@@ -450,33 +201,8 @@ extern void application_task(void)
       break;
     
     case APPSTATE_WRITE:
-		
-		//pasa alto
-			audioFilter_filterSel(AUDIO_FILTER_FILTER_SEL_HIGH_PASS);
-		
-      if (f_open(&FileWrite, WAVE_REC_1000_NAME_COMPLETO, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
-      {
-        Error_Handler();
-      }
-      else
-      {
-				if (f_open(&FileRead, WAVE_NAME_COMPLETO, FA_READ) != FR_OK)
-				{
-					Error_Handler();
-				}
-				else
-				{
-					f_read (&FileRead, &waveformat, sizeof(waveformat), &bytesread);
-					
-					WaveRecord(&FileWrite, waveformat, getDataCB);
-					f_close(&FileWrite);
-					appState = APPSTATE_PLAY;
-				}
-				f_close(&FileRead);
-			}
-	
+
 			//pasa bajo
-			
 			audioFilter_filterSel(AUDIO_FILTER_FILTER_SEL_LOW_PASS);
 		
       if (f_open(&FileWrite, WAVE_REC_50_NAME_COMPLETO, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
@@ -502,21 +228,19 @@ extern void application_task(void)
 			appState = APPSTATE_PLAY;
       break;
 
-			
     case APPSTATE_PLAY:
 			if (f_open(&FileRead, WAVE_NAME_COMPLETO, FA_READ) != FR_OK){
-				
-        Error_Handler();
+				appState = APPSTATE_IDLE;
+//        Error_Handler();
 				
       }else{
-      
+
 				/* Read sizeof(WaveFormat) from the selected file */
         f_read (&FileRead, &waveformat, sizeof(waveformat), &bytesread);
         WavePlayerStart(waveformat, getDataCB, 80);
         f_close(&FileRead);
       }
       break;
-			
 			
     default:
       appState = APPSTATE_IDLE;
