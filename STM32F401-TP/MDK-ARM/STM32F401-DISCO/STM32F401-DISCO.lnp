@@ -56,7 +56,6 @@
 "stm32f401-disco\usbh_ioreq.o"
 "stm32f401-disco\usbh_pipes.o"
 --library_type=microlib --strict --scatter "STM32F401-DISCO\STM32F401-DISCO.sct"
-
 --diag_suppress=L6329 --summary_stderr --info summarysizes --map --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers
 --list "€õ$\STM32F401-DISCO.map" -o STM32F401-DISCO\STM32F401-DISCO.axf

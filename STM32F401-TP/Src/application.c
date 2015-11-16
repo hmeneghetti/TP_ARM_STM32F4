@@ -1,5 +1,4 @@
-/**
-  ******************************************************************************
+/*******************************************************************************
   * @file    application.c 
   * @author  Gustavo Muro
   * @version V0.0.1
@@ -34,8 +33,7 @@
   * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   * POSSIBILITY OF SUCH DAMAGE.
   *
-  ******************************************************************************
-  */ 
+  *****************************************************************************/ 
 
 /* Includes ------------------------------------------------------------------*/
 #include "application.h"
@@ -52,8 +50,7 @@
 #include "timer2.h"
 
 /* Private typedef -----------------------------------------------------------*/
-typedef enum
-{
+typedef enum{
   APPSTATE_IDLE = 0,
   APPSTATE_MOUNT_FS,
   APPSTATE_UMOUNT_FS,
@@ -68,6 +65,13 @@ typedef enum
 #define SINE_GEN_1KHZ_LENGTH          (SINE_GEN_AUDIO_SAMPLE_RATE/1000)
 #define SINE_GEN_500HZ_LENGTH         (SINE_GEN_AUDIO_SAMPLE_RATE/500)
 
+//	Estados de la SM para deteccion de pulsos.
+#define St_Idle							0
+#define St_Pulse_det				1
+
+//	Valor de umbral RMS para deteccion de tono.
+#define RMS_VALUE_DETECT		1000
+
 /* Private variables ---------------------------------------------------------*/
 static FATFS USBDISKFatFs;           /* File system object for USB disk logical drive */
 static char USBDISKPath[4];          /* USB Host logical drive path */
@@ -78,18 +82,13 @@ static uint8_t usbConnected = 0;
 static FIL FileRead;
 static FIL FileWrite;
 
+//	Variable a sincronizar por el GTS.
 uint16_t sync_tick = 0;
 
 /* Private function prototypes -----------------------------------------------*/
-
+void SM_Pulse_Detect(int16_t rms_value);
+	
 /* Private functions ---------------------------------------------------------*/
-
-//	Estados de la SM para deteccion de pulsos.
-#define St_Idle							0
-#define St_Pulse_det				1
-
-//	Valor de RMS para deteccion de tono.
-#define RMS_VALUE_DETECT		1000
 
 //	Maquina de estados para la deteccion y encendido de leds.	//
 void SM_Pulse_Detect(int16_t rms_value){
@@ -133,11 +132,27 @@ void SM_Pulse_Detect(int16_t rms_value){
 	return;
 }
 
+//	Funcion llamada por la interrupcion del Timer 2 para el encendido
+//	del LED5 durante 1 segundo cada 60 segundos.
+void Sync_Pulse_Int(void){
+	
+	if(sync_tick == 60){
+		BSP_LED_On(LED5);
+		sync_tick = 0;
+	}else{
+		BSP_LED_Off(LED5);
+	}
+	
+	sync_tick++;
+	
+	return;
+}
+
 int32_t getDataCB(int16_t *pBuff, int32_t length){
 	
   UINT bytesread = 0;
 	int16_t Audio_RMS_value;	//	Valor RMS de 512 muestras
-	static int16_t count=0;
+//	static int16_t count=0;
 	
   f_read(&FileRead, pBuff, length*sizeof(int16_t), (void *)&bytesread);
   
@@ -145,8 +160,8 @@ int32_t getDataCB(int16_t *pBuff, int32_t length){
   
 	arm_rms_q15_m4(pBuff, length, &Audio_RMS_value);
 	
-	count++;
-	printf("Valores: %d, %d RMS\n", count, Audio_RMS_value);
+//	count++;
+//	printf("Valores: %d, %d RMS\n", count, Audio_RMS_value);
 
   SM_Pulse_Detect(Audio_RMS_value);
 	
@@ -156,41 +171,37 @@ int32_t getDataCB(int16_t *pBuff, int32_t length){
 
 /* Exported functions ------------------------------------------------------- */
 
-extern void application_init(void)
-{
-  /*##-1- Link the USB Host disk I/O driver ##################################*/
-  if(FATFS_LinkDriver(&USBH_Driver, USBDISKPath) != 0)
-  {
-    Error_Handler();
-  }
+extern void application_init(void){
+		/*##-1- Link the USB Host disk I/O driver ##################################*/
+		if(FATFS_LinkDriver(&USBH_Driver, USBDISKPath) != 0){
+			Error_Handler();
+		}
   
-  TickTock_Init();
-  
-  audioFilter_init();
+		TickTock_Init();
+		
+		audioFilter_init();
+		
+		return;
 }
 
-extern void application_task(void)
-{
+extern void application_task(void){
+	
   UINT bytesread = 0;
   WAVE_FormatTypeDef waveformat;
   
-  switch (appState)
-  {
+  switch (appState){
+		
     case APPSTATE_IDLE:
-      if (usbConnected)
-      {
+      if (usbConnected){
         appState = APPSTATE_MOUNT_FS;
       }
       break;
     
     case APPSTATE_MOUNT_FS:
-      if (f_mount(&USBDISKFatFs, (TCHAR const*)USBDISKPath, 0 ) != FR_OK ) 
-      {
+      if (f_mount(&USBDISKFatFs, (TCHAR const*)USBDISKPath, 0 ) != FR_OK){
         /* FatFs initialization fails */
         Error_Handler();
-      }
-      else
-      {
+      }else{
         appState = APPSTATE_PLAY;
       }
       break;
@@ -201,7 +212,6 @@ extern void application_task(void)
       break;
     
     case APPSTATE_WRITE:
-
 			//pasa bajo
 			audioFilter_filterSel(AUDIO_FILTER_FILTER_SEL_LOW_PASS);
 		
@@ -224,7 +234,6 @@ extern void application_task(void)
 				}
 				f_close(&FileRead);
 			}
-			
 			appState = APPSTATE_PLAY;
       break;
 
@@ -232,9 +241,7 @@ extern void application_task(void)
 			if (f_open(&FileRead, WAVE_NAME_COMPLETO, FA_READ) != FR_OK){
 				appState = APPSTATE_IDLE;
 //        Error_Handler();
-				
       }else{
-
 				/* Read sizeof(WaveFormat) from the selected file */
         f_read (&FileRead, &waveformat, sizeof(waveformat), &bytesread);
         WavePlayerStart(waveformat, getDataCB, 80);
@@ -246,15 +253,17 @@ extern void application_task(void)
       appState = APPSTATE_IDLE;
       break;
   }
+	
+	return;
 }
 
-extern void application_conect(void)
-{
-  usbConnected = 1;
+extern void application_conect(void){
+	usbConnected = 1;
 }
-extern void application_disconect(void)
-{
-  usbConnected = 0;
+
+extern void application_disconect(void){
+	usbConnected = 0;
 }
+
 /* End of file ---------------------------------------------------------------*/
 

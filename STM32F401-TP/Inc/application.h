@@ -62,6 +62,7 @@ extern void application_init(void);
 extern void application_task(void);
 extern void application_conect(void);
 extern void application_disconect(void);
+extern void Sync_Pulse_Int(void);
 
 #endif /* APPLICATION_H */
 
